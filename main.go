@@ -60,35 +60,73 @@ func initCfg() {
 
 const MAX_DEPTH = 32
 
-func randChooseFileWithDepth(dir string, depth int) (string, error) {
-	if depth >= MAX_DEPTH {
-		return "", fmt.Errorf("too deep recursion %d for %s", depth, dir)
+func storeIndex(dir string) {
+	log.Println("storeIndex: >>")
+	defer log.Println("storeIndex: <<")
+
+	var index []string
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			ext := strings.ToLower(filepath.Ext(info.Name()))
+			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" {
+				index = append(index, path)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		log.Println("storeIndex: Walk Error:", err)
+		return
 	}
 
-	files, err := ioutil.ReadDir(dir)
+	indexTmp := filepath.Join(dir, "index.txt.tmp")
+	err = ioutil.WriteFile(indexTmp, []byte(strings.Join(index, "\n")), 0644)
+	if err != nil {
+		log.Println("storeIndex: Write Error:", err)
+		return
+	}
+
+	indexFile := filepath.Join(dir, "index.txt")
+	err = os.Rename(indexTmp, indexFile)
+	if err != nil {
+		log.Println("storeIndex: Move Error:", err)
+		return
+	}
+}
+
+func loadIndex(dir string) ([]string, error) {
+	log.Println("loadIndex: >>")
+	defer log.Println("loadIndex: <<")
+
+	indexFile := filepath.Join(dir, "index.txt")
+	data, err := ioutil.ReadFile(indexFile)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Split(string(data), "\n"), nil
+}
+
+func randChooseFile(dir string) (string, error) {
+	log.Println("RandChooseFile: >>")
+	defer log.Println("RandChooseFile: <<")
+
+	files, err := loadIndex(dir)
 	if err != nil {
 		return "", err
 	}
 
-	for i := 0; i < len(files)*2; i++ {
-		f := files[rand.Intn(len(files))]
-		fullPath := filepath.Join(dir, f.Name())
-
-		if f.IsDir() {
-			return randChooseFileWithDepth(fullPath, depth+1)
-		}
-
-		ext := strings.ToLower(filepath.Ext(f.Name()))
-		if ext == ".png" || ext == ".jpg" || ext == ".jpeg" {
-			return fullPath, nil
-		}
+	if len(files) == 0 {
+		return "", fmt.Errorf("no files in %s", dir)
 	}
 
-	return "", fmt.Errorf("no suitable file found in %s", dir)
-}
-
-func randChooseFile(dir string) (string, error) {
-	return randChooseFileWithDepth(dir, 0)
+	return files[rand.Intn(len(files))], nil
 }
 
 func getEnvInt(name string, defaultValue int64) int64 {
@@ -194,6 +232,7 @@ func handleCron(b *tele.Bot) {
 
 func main() {
 	initCfg()
+	storeIndex(cfg.WorkingDir)
 
 	pref := tele.Settings{
 		Token:  cfg.TelegramToken,
@@ -220,6 +259,11 @@ func main() {
 		c.AddFunc(cfg.CronSpec, func() {
 			handleCron(b)
 		})
+
+		c.AddFunc("0 * * * *", func() {
+			storeIndex(cfg.WorkingDir)
+		})
+
 		log.Printf("Cron spec: %s", cfg.CronSpec)
 		c.Start()
 		defer c.Stop()
